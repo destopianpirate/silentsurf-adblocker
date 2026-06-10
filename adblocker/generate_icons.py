@@ -121,15 +121,15 @@ def save_png(filename, width, height, pixels):
         f.write(png)
 
 def main():
-    os.makedirs('adblocker/icons', exist_ok=True)
+    os.makedirs('icons', exist_ok=True)
     sizes = [16, 32, 48, 128]
     
     for size in sizes:
         print(f"Generating icon {size}x{size}...")
         pixels = generate_pixel_data(size, size)
-        save_png(f"adblocker/icons/icon{size}.png", size, size, pixels)
+        save_png(f"icons/icon{size}.png", size, size, pixels)
     
-    print("All icons successfully generated in the 'adblocker/icons/' directory!")
+    print("All icons successfully generated in the 'icons/' directory!")
 
 if __name__ == '__main__':
     main()
