@@ -100,6 +100,12 @@ body {
   fill: var(--accent-green);
 }
 
+.logo-img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
 .logo-text {
   font-family: var(--font-display);
   font-weight: 700;
