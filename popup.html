@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Destopian AdBlocker Pro</title>
+  <!-- Google Fonts for premium typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo-area">
+        <svg class="logo-icon" viewBox="0 0 24 24" width="24" height="24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" />
+        </svg>
+        <span class="logo-text">Destopian <span class="logo-highlight">AdBlock Pro</span></span>
+      </div>
+      <div class="status-indicator">
+        <span class="status-dot" id="statusDot"></span>
+        <span class="status-label" id="statusLabel">Active</span>
+      </div>
+    </header>
+
+    <!-- Navigation Tab Bar -->
+    <nav class="tab-nav">
+      <button class="nav-btn active" data-tab="tab-dashboard" id="btnTabDashboard">
+        <svg viewBox="0 0 24 24" width="18" height="18">
+          <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>
+        </svg>
+        <span>Dashboard</span>
+      </button>
+      <button class="nav-btn" data-tab="tab-whitelist" id="btnTabWhitelist">
+        <svg viewBox="0 0 24 24" width="18" height="18">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+        </svg>
+        <span>Whitelist</span>
+      </button>
+      <button class="nav-btn" data-tab="tab-rules" id="btnTabRules">
+        <svg viewBox="0 0 24 24" width="18" height="18">
+          <path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/>
+        </svg>
+        <span>Rules</span>
+      </button>
+      <button class="nav-btn" data-tab="tab-stats" id="btnTabStats">
+        <svg viewBox="0 0 24 24" width="18" height="18">
+          <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/>
+        </svg>
+        <span>Stats</span>
+      </button>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Tab 1: Dashboard -->
+      <section id="tab-dashboard" class="tab-pane active">
+        <div class="dashboard-core">
+          <!-- Big Power Button -->
+          <div class="power-wrapper">
+            <button class="power-btn" id="btnPowerToggle">
+              <svg viewBox="0 0 24 24" width="36" height="36" class="power-icon">
+                <path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42C18.43 8.35 19 10.11 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-1.89.57-3.65 1.58-5.41L5.17 5.17C3.81 7.04 3 9.42 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.58-.81-4.96-2.17-6.83z"/>
+              </svg>
+            </button>
+            <div class="power-glow"></div>
+          </div>
+
+          <!-- Counter Cards -->
+          <div class="counter-grid">
+            <div class="counter-card" id="cardTabBlocked">
+              <span class="counter-number" id="numTabBlocked">0</span>
+              <span class="counter-label">Blocked on this Page</span>
+            </div>
+            <div class="counter-card" id="cardTotalBlocked">
+              <span class="counter-number" id="numTotalBlocked">0</span>
+              <span class="counter-label">Total Ads Blocked</span>
+            </div>
+          </div>
+
+          <!-- Active Site Control -->
+          <div class="site-control-card">
+            <div class="site-info">
+              <span class="site-domain" id="txtCurrentDomain">Scanning domain...</span>
+              <span class="site-status-text" id="txtDomainStatus">Blocking is active</span>
+            </div>
+            <div class="switch-wrapper">
+              <label class="switch">
+                <input type="checkbox" id="chkDomainWhitelist">
+                <span class="slider round"></span>
+              </label>
+              <span class="switch-label">Whitelist</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 2: Whitelist -->
+      <section id="tab-whitelist" class="tab-pane">
+        <div class="pane-header">
+          <h3>Whitelisted Websites</h3>
+          <p>Ads will be allowed on these trusted domains.</p>
+        </div>
+        <div class="list-wrapper">
+          <ul class="item-list" id="whitelistList">
+            <!-- Populated dynamically -->
+          </ul>
+          <div class="empty-state" id="whitelistEmpty">
+            <svg viewBox="0 0 24 24" width="48" height="48">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" opacity="0.3"/>
+            </svg>
+            <p>Your whitelist is empty.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 3: Custom Rules -->
+      <section id="tab-rules" class="tab-pane">
+        <div class="pane-header">
+          <h3>Custom Block Rules</h3>
+          <p>Add URLs or domain patterns to block manually.</p>
+        </div>
+        <div class="rules-input-row">
+          <input type="text" id="inputCustomRule" placeholder="e.g. *adserver.com* or badsite.org" autocomplete="off">
+          <button class="primary-btn" id="btnAddRule">
+            <svg viewBox="0 0 24 24" width="16" height="16">
+              <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+            </svg>
+            Add
+          </button>
+        </div>
+        <div class="list-wrapper">
+          <ul class="item-list" id="rulesList">
+            <!-- Populated dynamically -->
+          </ul>
+          <div class="empty-state" id="rulesEmpty">
+            <svg viewBox="0 0 24 24" width="48" height="48">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" opacity="0.3"/>
+            </svg>
+            <p>No custom rules yet.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 4: Stats -->
+      <section id="tab-stats" class="tab-pane">
+        <div class="pane-header">
+          <h3>Efficiency Metrics</h3>
+          <p>Insights on bandwidth, speed, and blocked content.</p>
+        </div>
+        <div class="stats-wrapper">
+          <div class="stat-metrics">
+            <div class="metric-box">
+              <span class="metric-value" id="valSavedData">0.0 MB</span>
+              <span class="metric-title">Data Saved</span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-value" id="valSavedTime">0.0s</span>
+              <span class="metric-title">Browsing Time Saved</span>
+            </div>
+          </div>
+          
+          <div class="chart-section">
+            <h4 class="chart-title">Blocked Content Categories</h4>
+            <div class="chart-row">
+              <span class="chart-label">Ad Servers</span>
+              <div class="bar-wrapper">
+                <div class="bar-fill ad-fill" style="width: 65%;"></div>
+              </div>
+              <span class="chart-percentage" id="pctAds">65%</span>
+            </div>
+            <div class="chart-row">
+              <span class="chart-label">Analytics & Trackers</span>
+              <div class="bar-wrapper">
+                <div class="bar-fill tracker-fill" style="width: 25%;"></div>
+              </div>
+              <span class="chart-percentage" id="pctTrackers">25%</span>
+            </div>
+            <div class="chart-row">
+              <span class="chart-label">Manually Blocked</span>
+              <div class="bar-wrapper">
+                <div class="bar-fill manual-fill" style="style: 10%;"></div>
+              </div>
+              <span class="chart-percentage" id="pctManual">10%</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <span>Powered by Manifest V3 DNR</span>
+      <span>v1.0.0</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
