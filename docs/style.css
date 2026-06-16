@@ -1,3 +1,5 @@
+@import url('https://fonts.cdnfonts.com/css/google-sans');
+
 :root {
     --bg-dark: #0a0a0c;
     --bg-panel: #121316;
@@ -8,9 +10,9 @@
     --accent-green: #00ff66;
     --border-color: #2a2b32;
     
-    --font-heading: 'Space Grotesk', sans-serif;
-    --font-body: 'Space Grotesk', sans-serif;
-    --font-mono: 'JetBrains Mono', monospace;
+    --font-heading: 'Product Sans', sans-serif;
+    --font-body: 'Product Sans', sans-serif;
+    --font-mono: 'Product Sans', sans-serif;
 }
 
 * {
