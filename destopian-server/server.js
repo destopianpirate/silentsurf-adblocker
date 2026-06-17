@@ -19,7 +19,6 @@ const MAX_KEYS_PER_WINDOW = 5;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
 
 // ═══════════════════════════════════════
 //  MIDDLEWARE: Optional API Key Auth
@@ -632,11 +631,8 @@ app.post('/api/image', optionalAuth, async (req, res) => {
 });
 
 // ═══════════════════════════════════════
-//  Fallback: Serve Web App
+//  Server Initialization
 // ═══════════════════════════════════════
-app.use((req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
 
 app.listen(PORT, () => {
   console.log('');
