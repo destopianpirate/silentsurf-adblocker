@@ -1,6 +1,7 @@
-# Ignore nested destopian-home repo
+# Ignore nested repos
 destopian-home/
 video-grabber/
+destopian-server/
 
 codebase_graph.md
 adblocker.pem
