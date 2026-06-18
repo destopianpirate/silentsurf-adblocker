@@ -15,6 +15,23 @@ const apiKeys = new Map();
 // Rate limit store for API key generation
 const keyGenerationRates = new Map();
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+
+// ── Format info cache (avoids repeated slow yt-dlp calls) ──
+const formatCache = new Map();
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+function getCachedInfo(url) {
+  const entry = formatCache.get(url);
+  if (entry && Date.now() - entry.ts < CACHE_TTL_MS) return entry.data;
+  return null;
+}
+function setCachedInfo(url, data) {
+  formatCache.set(url, { data, ts: Date.now() });
+  // Evict old entries
+  if (formatCache.size > 200) {
+    const oldest = formatCache.keys().next().value;
+    formatCache.delete(oldest);
+  }
+}
 const MAX_KEYS_PER_WINDOW = 5;
 
 app.use(cors());
@@ -68,9 +85,15 @@ async function extractCloudVideo(url) {
       } catch (e) {}
     });
 
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-    // Wait for JS challenges / ads / video elements to resolve
-    await new Promise(r => setTimeout(r, 8000));
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // Wait for JS challenges / ads / video elements to resolve (reduced from 8s)
+    await new Promise(r => setTimeout(r, 4000));
+
+    // If media already intercepted during page load, return early
+    if (mediaUrl) {
+      await browser.close();
+      return mediaUrl;
+    }
     
     // Check main page and all iframes
     if (!mediaUrl) {
@@ -132,7 +155,10 @@ function checkCloudStorage(url) {
     if (host.includes('diskwala.com')) {
       return { isCloud: true, unsupported: true, reason: 'Diskwala no longer hosts web videos. These links only work inside the Diskwala app.' };
     }
-    if (host.includes('terabox.com') || host.includes('nephobox.com') || host.includes('4funbox.com')) return { isCloud: true };
+    if (host.includes('terabox.com') || host.includes('nephobox.com') || host.includes('4funbox.com') ||
+        host.includes('teraboxapp.com') || host.includes('1024tera.com') || host.includes('freeterabox.com')) {
+      return { isCloud: true };
+    }
     return { isCloud: false };
   } catch (e) {
     return { isCloud: false };
@@ -205,11 +231,18 @@ app.post('/api/info', optionalAuth, async (req, res) => {
   }
 
   try {
-    const info = await youtubedl(url, {
-      dumpSingleJson: true,
-      noWarnings: true,
-      skipDownload: true
-    });
+    let info = getCachedInfo(url);
+    if (!info) {
+      info = await youtubedl(url, {
+        dumpSingleJson: true,
+        noWarnings: true,
+        skipDownload: true,
+        noPlaylist: true,
+        noCheckCertificates: true,
+        socketTimeout: 10
+      });
+      setCachedInfo(url, info);
+    }
 
     res.json({
       status: 'success',
@@ -225,6 +258,66 @@ app.post('/api/info', optionalAuth, async (req, res) => {
     res.status(400).json({ status: 'error', text: 'Could not fetch media info.' });
   }
 });
+
+// ═══════════════════════════════════════
+//  Helper: Process yt-dlp info into formats response
+// ═══════════════════════════════════════
+function processFormatsResponse(info, res) {
+  const videoFormats = [];
+  const audioFormats = [];
+  const seen = new Set();
+
+  (info.formats || []).forEach(f => {
+    if (!f.url || !f.url.startsWith('http')) return;
+
+    if (f.vcodec && f.vcodec !== 'none') {
+      const label = `${f.height || '?'}p`;
+      const key = `${f.height}-${f.ext}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        videoFormats.push({
+          format_id: f.format_id,
+          ext: f.ext,
+          height: f.height || 0,
+          label,
+          filesize: f.filesize || f.filesize_approx || null,
+          vcodec: f.vcodec,
+          acodec: f.acodec,
+          url: (f.acodec && f.acodec !== 'none') ? f.url : null
+        });
+      }
+    }
+
+    if (f.acodec && f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none')) {
+      const label = `${Math.round(f.abr) || '?'}kbps`;
+      const ext = f.ext === 'm4a' || f.ext === 'webm' ? f.ext : 'mp3';
+      const key = `audio-${Math.round(f.abr)}-${ext}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        audioFormats.push({
+          format_id: f.format_id,
+          ext: ext,
+          abr: f.abr || 0,
+          label,
+          filesize: f.filesize || f.filesize_approx || null,
+          acodec: f.acodec
+        });
+      }
+    }
+  });
+
+  videoFormats.sort((a, b) => (b.height || 0) - (a.height || 0));
+  audioFormats.sort((a, b) => (b.abr || 0) - (a.abr || 0));
+
+  return res.json({
+    status: 'success',
+    title: info.title || '',
+    thumbnail: info.thumbnail || info.thumbnails?.[info.thumbnails.length - 1]?.url || '',
+    duration: info.duration || 0,
+    video: videoFormats,
+    audio: audioFormats
+  });
+}
 
 // ═══════════════════════════════════════
 //  POST /api/formats — List Qualities
@@ -243,7 +336,41 @@ app.post('/api/formats', optionalAuth, async (req, res) => {
 
   try {
     if (isCloudStorage) {
-      console.log(`[FORMATS] Cloud storage detected. Bypassing yt-dlp...`);
+      console.log(`[FORMATS] Cloud storage detected. Trying yt-dlp first, then Puppeteer...`);
+      // Try yt-dlp first (it supports terabox natively now)
+      try {
+        const cloudInfo = await youtubedl(url, {
+          dumpSingleJson: true,
+          noWarnings: true,
+          skipDownload: true,
+          noPlaylist: true,
+          socketTimeout: 15
+        });
+        if (cloudInfo && cloudInfo.formats && cloudInfo.formats.length > 0) {
+          console.log(`[FORMATS] yt-dlp succeeded for cloud link`);
+          // Process like a normal link — fall through below
+          return processFormatsResponse(cloudInfo, res);
+        }
+      } catch (ytErr) {
+        console.log(`[FORMATS] yt-dlp failed for cloud link: ${ytErr.message}. Falling back to Puppeteer...`);
+      }
+      // Fallback: Puppeteer extraction
+      try {
+        const streamUrl = await extractCloudVideo(url);
+        if (streamUrl) {
+          return res.json({
+            status: 'success',
+            title: 'Cloud Video',
+            thumbnail: '',
+            duration: 0,
+            video: [{ format_id: 'cloud_direct', label: 'Max Quality', ext: 'mp4', filesize: null }],
+            audio: [],
+            cloudUrl: streamUrl
+          });
+        }
+      } catch (puppErr) {
+        console.log(`[FORMATS] Puppeteer also failed: ${puppErr.message}`);
+      }
       return res.json({
         status: 'success',
         title: 'Cloud Video',
@@ -253,64 +380,25 @@ app.post('/api/formats', optionalAuth, async (req, res) => {
         audio: []
       });
     }
-    const info = await youtubedl(url, {
-      dumpSingleJson: true,
-      noWarnings: true,
-      skipDownload: true
-    });
 
-    const videoFormats = [];
-    const audioFormats = [];
-    const seen = new Set();
+    // Check cache first
+    let info = getCachedInfo(url);
+    if (!info) {
+      console.log(`[FORMATS] Cache miss, calling yt-dlp...`);
+      info = await youtubedl(url, {
+        dumpSingleJson: true,
+        noWarnings: true,
+        skipDownload: true,
+        noPlaylist: true,
+        noCheckCertificates: true,
+        socketTimeout: 10
+      });
+      setCachedInfo(url, info);
+    } else {
+      console.log(`[FORMATS] Cache hit!`);
+    }
 
-    (info.formats || []).forEach(f => {
-      if (!f.url || !f.url.startsWith('http')) return;
-
-      if (f.vcodec && f.vcodec !== 'none') {
-        const label = `${f.height || '?'}p`;
-        const key = `${f.height}-${f.ext}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          videoFormats.push({
-            format_id: f.format_id,
-            ext: f.ext,
-            height: f.height || 0,
-            label,
-            filesize: f.filesize || f.filesize_approx || null,
-            vcodec: f.vcodec,
-            acodec: f.acodec
-          });
-        }
-      }
-
-      if (f.acodec && f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none')) {
-        const label = `${f.abr || '?'}kbps`;
-        const key = `audio-${f.abr}-${f.ext}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          audioFormats.push({
-            format_id: f.format_id,
-            ext: f.ext,
-            abr: f.abr || 0,
-            label,
-            filesize: f.filesize || f.filesize_approx || null,
-            acodec: f.acodec
-          });
-        }
-      }
-    });
-
-    videoFormats.sort((a, b) => (b.height || 0) - (a.height || 0));
-    audioFormats.sort((a, b) => (b.abr || 0) - (a.abr || 0));
-
-    res.json({
-      status: 'success',
-      title: info.title || '',
-      thumbnail: info.thumbnail || info.thumbnails?.[info.thumbnails.length - 1]?.url || '',
-      duration: info.duration || 0,
-      video: videoFormats,
-      audio: audioFormats
-    });
+    return processFormatsResponse(info, res);
   } catch (err) {
     console.error('[-] Formats error:', err.message);
     res.status(400).json({ status: 'error', text: 'Could not list formats.' });
@@ -438,55 +526,168 @@ app.post('/api/json', optionalAuth, async (req, res) => {
 });
 
 // ═══════════════════════════════════════
-//  GET /api/stream — Proxy and Merge High Quality Streams
+//  GET /api/stream — Merge Video+Audio via FFmpeg
 // ═══════════════════════════════════════
-app.get('/api/stream', (req, res) => {
+app.get('/api/stream', async (req, res) => {
   const { url, format } = req.query;
   if (!url) return res.status(400).send('Missing URL');
 
-  console.log(`[STREAM] Proxying stream for ${url} with format ${format}`);
-
-  // We set headers for a generic mp4 download
-  res.setHeader('Content-Disposition', `attachment; filename="video_${Date.now()}.mp4"`);
-  res.setHeader('Content-Type', 'video/mp4');
+  const formatStr = format || 'bestvideo+bestaudio/best';
+  console.log(`[STREAM] Request for ${url} with format ${formatStr}`);
 
   try {
     const ffmpegPath = require('ffmpeg-static');
-    
-    // We spawn yt-dlp directly instead of youtube-dl-exec to pipe stdout
     const { spawn } = require('child_process');
-    const ytDlpPath = require('youtube-dl-exec').constants.YOUTUBE_DL_PATH;
-    
-    const args = [
-      '-o', '-', 
-      '-f', format || 'bestvideo+bestaudio/best', 
-      '--ffmpeg-location', ffmpegPath,
-      '--merge-output-format', 'mp4',
-      '--no-playlist',
-      '--no-warnings',
-      url
-    ];
 
-    const child = spawn(ytDlpPath, args);
+    // Get cached info or fetch new (fast if cached)
+    let info = getCachedInfo(url);
+    if (!info) {
+      console.log(`[STREAM] Cache miss, fetching info...`);
+      info = await youtubedl(url, {
+        dumpSingleJson: true,
+        noWarnings: true,
+        skipDownload: true,
+        noPlaylist: true,
+        noCheckCertificates: true,
+        socketTimeout: 10
+      });
+      setCachedInfo(url, info);
+    } else {
+      console.log(`[STREAM] Cache hit!`);
+    }
+
+    const formats = info.formats || [];
+    let videoUrl = null;
+    let audioUrl = null;
+    let isAudioOnly = false;
+
+    if (formatStr.includes('+')) {
+      // Merged format like "313+bestaudio/best"
+      const mainPart = formatStr.split('/')[0]; // "313+bestaudio"
+      const [videoFmtId, audioFmtPart] = mainPart.split('+');
+
+      // Find video URL by format_id
+      const videoFormat = formats.find(f => f.format_id === videoFmtId && f.url);
+      if (videoFormat) videoUrl = videoFormat.url;
+
+      // Find best audio URL
+      if (audioFmtPart === 'bestaudio') {
+        const audioFormats = formats.filter(f =>
+          f.acodec && f.acodec !== 'none' &&
+          (!f.vcodec || f.vcodec === 'none') &&
+          f.url && f.url.startsWith('http')
+        );
+        audioFormats.sort((a, b) => (b.abr || 0) - (a.abr || 0));
+        if (audioFormats.length > 0) audioUrl = audioFormats[0].url;
+      } else {
+        const audioFormat = formats.find(f => f.format_id === audioFmtPart && f.url);
+        if (audioFormat) audioUrl = audioFormat.url;
+      }
+    } else {
+      // Single format (audio-only or pre-muxed)
+      isAudioOnly = true;
+      const singleFormat = formats.find(f => f.format_id === formatStr && f.url);
+      if (singleFormat) {
+        audioUrl = singleFormat.url;
+      } else {
+        // Fallback: try bestaudio
+        const audioFormats = formats.filter(f =>
+          f.acodec && f.acodec !== 'none' &&
+          (!f.vcodec || f.vcodec === 'none') &&
+          f.url && f.url.startsWith('http')
+        );
+        audioFormats.sort((a, b) => (b.abr || 0) - (a.abr || 0));
+        if (audioFormats.length > 0) audioUrl = audioFormats[0].url;
+      }
+    }
+
+    console.log(`[STREAM] videoUrl: ${videoUrl ? 'found' : 'none'}, audioUrl: ${audioUrl ? 'found' : 'none'}`);
+
+    // Set headers
+    if (isAudioOnly || !videoUrl) {
+      res.setHeader('Content-Disposition', `attachment; filename="audio_${Date.now()}.mp4"`);
+      res.setHeader('Content-Type', 'audio/mp4');
+    } else {
+      res.setHeader('Content-Disposition', `attachment; filename="video_${Date.now()}.mp4"`);
+      res.setHeader('Content-Type', 'video/mp4');
+    }
+
+    let ffmpegArgs;
+
+    if (videoUrl && audioUrl) {
+      // MERGE video + audio with ffmpeg — the key fix for "no audio"
+      console.log(`[STREAM] Merging video + audio with ffmpeg...`);
+      ffmpegArgs = [
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        '-reconnect_delay_max', '5',
+        '-i', videoUrl,
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        '-reconnect_delay_max', '5',
+        '-i', audioUrl,
+        '-map', '0:v:0',
+        '-map', '1:a:0',
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-movflags', 'frag_keyframe+empty_moov+faststart',
+        '-f', 'mp4',
+        'pipe:1'
+      ];
+    } else if (videoUrl) {
+      // Video only (rare fallback)
+      ffmpegArgs = [
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        '-i', videoUrl,
+        '-c', 'copy',
+        '-movflags', 'frag_keyframe+empty_moov+faststart',
+        '-f', 'mp4',
+        'pipe:1'
+      ];
+    } else if (audioUrl) {
+      // Audio only
+      ffmpegArgs = [
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        '-i', audioUrl,
+        '-c:a', 'aac',
+        '-movflags', 'frag_keyframe+empty_moov+faststart',
+        '-f', 'mp4',
+        'pipe:1'
+      ];
+    } else {
+      return res.status(400).send('Could not find stream URLs for the requested format.');
+    }
+
+    const child = spawn(ffmpegPath, ffmpegArgs);
 
     child.stdout.pipe(res);
-    
+
     child.stderr.on('data', (data) => {
-      // yt-dlp outputs progress to stderr
-      // console.log(data.toString());
+      const msg = data.toString();
+      if (msg.includes('Error') || msg.includes('error')) {
+        console.error(`[FFMPEG] ${msg.trim()}`);
+      }
     });
 
     child.on('close', (code) => {
-      console.log(`[STREAM] Proxy finished with code ${code}`);
-      res.end();
+      console.log(`[STREAM] FFmpeg finished with code ${code}`);
+      if (!res.writableEnded) res.end();
+    });
+
+    child.on('error', (err) => {
+      console.error(`[STREAM] FFmpeg spawn error:`, err.message);
+      if (!res.headersSent) res.status(500).send('FFmpeg error');
     });
 
     req.on('close', () => {
-      child.kill();
+      child.kill('SIGTERM');
     });
+
   } catch (err) {
-    console.error('[-] Stream proxy error:', err);
-    if (!res.headersSent) res.status(500).send('Error proxying stream');
+    console.error('[-] Stream error:', err.message);
+    if (!res.headersSent) res.status(500).send('Error: ' + err.message);
   }
 });
 
